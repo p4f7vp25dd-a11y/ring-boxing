@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>RING 3D</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+html,body{height:100%;background:#0b0d12;color:#fff;font-family:-apple-system,system-ui,sans-serif;overflow:hidden;touch-action:none;color-scheme:dark}
+#wrap{display:flex;flex-direction:column;height:100%}
+#game{flex:1;position:relative;min-height:0;overflow:hidden}
+#hud{position:absolute;top:0;left:0;right:0;padding:10px;display:flex;justify-content:space-between;gap:8px;pointer-events:none;z-index:2}
+.bar{width:44%;background:rgba(12,15,24,.86);border:1px solid #232a3b;border-radius:12px;padding:8px}
+.name{font-size:11px;font-weight:800;letter-spacing:2px;margin-bottom:6px;white-space:nowrap}
+.hp{height:10px;background:#262c3c;border-radius:6px;overflow:hidden;margin-bottom:4px}
+.hp>i{display:block;height:100%;width:100%;transition:width .2s}
+.st{height:5px;background:#262c3c;border-radius:4px;overflow:hidden}
+.st>i{display:block;height:100%;width:100%;background:#f2c94c}
+#msg{position:absolute;top:42%;left:0;right:0;text-align:center;font-size:24px;font-weight:900;letter-spacing:3px;text-shadow:0 2px 10px #000;z-index:2;pointer-events:none}
+#pause{position:absolute;top:118px;right:10px;z-index:3;background:#1a2030;border:1px solid #3a4256;color:#fff;border-radius:12px;padding:8px 14px;font-weight:800;font-size:13px}
+#pad{display:flex;align-items:center;gap:8px;padding:8px;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));background:#0b0d12}
+#pad .mv{width:68px;height:62px;border-radius:16px;border:1px solid #3a4256;background:#151a26;color:#fff;font-size:22px;font-weight:800}
+#pad .mv.on{background:#2a3350}
+#help{flex:1;font-size:11px;color:#9aa3b8;line-height:1.4;text-align:center}
+#slip{width:84px;height:62px;border-radius:16px;border:1px solid #35548a;background:#151a26;color:#fff;font-weight:800;font-size:13px;letter-spacing:1px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="game">
+    <div id="hud">
+      <div class="bar">
+        <div class="name" style="color:#ff7a6b">YOU · RED CORNER</div>
+        <div class="hp"><i id="hpP" style="background:#e8c15a"></i></div>
+        <div class="st"><i id="stP"></i></div>
+      </div>
+      <div class="bar">
+        <div class="name" style="color:#8fb8ff">CPU · BLUE CORNER</div>
+        <div class="hp"><i id="hpC" style="background:linear-gradient(90deg,#6fb6ff,#8b7bff)"></i></div>
+        <div class="st"><i id="stC"></i></div>
+      </div>
+    </div>
+    <div id="msg"></div>
+    <button id="pause">II ПАУЗА</button>
+  </div>
+  <div id="pad">
+    <button class="mv" data-d="-1">◀</button>
+    <button class="mv" data-d="1">▶</button>
+    <div id="help">Тап — джеб · свайп вправо — кросс · влево — хук · вверх — апперкот · вниз — корпус · держать — блок</div>
+    <button id="slip">УКЛОН</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const gameEl = $('game');
+const KEYS = ['lean','ht','hs','lSA','lFA','rSA','rFA','lTA','lSh','rTA','rSh'];
+
+// Poses: arm angles are absolute (0 = straight down, positive = forward), legs likewise.
+const G   = {lean:0.12, ht:0, hs:0, lSA:0.6, lFA:3.0, rSA:0.15, rFA:2.7, lTA:0.3, lSh:0.1, rTA:-0.3, rSh:-0.15};
+const BLK = {lean:0.02, ht:-0.1, hs:0, lSA:0.96, lFA:3.1, rSA:0.7, rFA:2.9, lTA:0.3, lSh:0.1, rTA:-0.3, rSh:-0.15};
+
+const ATK = {
+  jab:   {fist:'lF', zone:'head', dmg:7,  cost:6,  wd:0.08, ed:0.07,
+          wind:{lSA:0.3, lFA:2.4, lean:-0.06},
+          ext: {lSA:1.5, lFA:1.5, lean:0.2, ht:0.1}},
+  cross: {fist:'rF', zone:'head', dmg:12, cost:10, wd:0.11, ed:0.08,
+          wind:{rSA:0.4, rFA:2.2, lean:-0.12, rTA:-0.2},
+          ext: {rSA:1.5, rFA:1.48, lean:0.32, ht:0.15, rTA:-0.45, rSh:-0.2}},
+  hook:  {fist:'lF', zone:'head', dmg:11, cost:10, wd:0.12, ed:0.09,
+          wind:{lSA:0.2, lFA:2.3, lean:-0.12},
+          ext: {lSA:1.3, lFA:2.0, lean:0.18, ht:-0.05}},
+  body:  {fist:'lF', zone:'body', dmg:8, cost:8,  wd:0.09, ed:0.08,
+          wind:{lSA:0.5, lFA:2.6, lean:-0.05},
+          ext: {lSA:1.05, lFA:1.3, lean:0.35, ht:0.2, lTA:0.5}},
+  upper: {fist:'rF', zone:'head', dmg:13, cost:12, wd:0.14, ed:0.10,
+          wind:{rSA:0.1, rFA:0.3, lean:-0.15, rTA:-0.25, rSh:-0.3},
+          ext: {rSA:0.75, rFA:2.9, lean:0.3, rTA:-0.2, rSh:-0.25, lTA:0.4}}
+};
+
+// ---------- helpers ----------
+const copyP = p => Object.assign({}, p);
+const lerpP = (a, b, t) => { const o = {}; for (const k of KEYS) o[k] = a[k] + (b[k] - a[k]) * t; return o; };
+const ease = k => k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2) / 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const stance = f => f.block ? BLK : G;
+const merge = (f, o) => Object.assign({}, stance(f), o);
+const busy = f => !!(f.tr || f.seq.length);
+const showMsg = (t, dur) => { $('msg').textContent = t; msgT = dur; };
+
+// ---------- state ----------
+let renderer, scene, camera;
+let time = 0, shake = 0, state = 'fight', downF = null, downT = 0, koT = 0, msgT = 0;
+let paused = false, thinkT = 0, blockT = 0, moveHold = 0;
+const P1 = makeFighter(1, 0);
+const C  = makeFighter(-1, 2.3);
+
+function makeFighter(dir, ph) {
+  return {dir, ph, x: 0, hp: 100, st: 100, cur: copyP(G), tr: null, seq: [],
+          block: false, stepT: 0, vx: 0, dodgeT: 0, fall: 0, down: false, m: null};
+}
+
+// ---------- 3D model: boxer built from joints (units ~ metres) ----------
+function limb(len, r, mat) {
+  const g = new THREE.Group();
+  const cyl = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, len, 12), mat);
+  cyl.position.y = -len / 2;
+  g.add(cyl);
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(r, 12, 10), mat));
+  return g;
+}
+function mesh(geo, mat) { return new THREE.Mesh(geo, mat); }
+
+function buildFighter(shortsCol, gloveCol) {
+  const skin   = new THREE.MeshStandardMaterial({color: 0xd9a27a, roughness: 0.7});
+  const shorts = new THREE.MeshStandardMaterial({color: shortsCol, roughness: 0.5});
+  const glove  = new THREE.MeshStandardMaterial({color: gloveCol, roughness: 0.3});
+  const hair   = new THREE.MeshStandardMaterial({color: 0x2a1c14, roughness: 0.9});
+  const boot   = new THREE.MeshStandardMaterial({color: 0x151515, roughness: 0.4});
+  const m = {};
+  m.root = new THREE.Group();
+  m.pelvis = new THREE.Group(); m.root.add(m.pelvis);
+  m.pelvis.add(mesh(new THREE.SphereGeometry(0.13, 18, 12), shorts));
+  m.torso = new THREE.Group(); m.pelvis.add(m.torso);
+  m.tor = mesh(new THREE.CylinderGeometry(0.13, 0.11, 0.52, 16), skin);
+  m.tor.position.y = 0.26; m.torso.add(m.tor);
+  const trunk = mesh(new THREE.CylinderGeometry(0.135, 0.125, 0.2, 16), shorts);
+  trunk.position.y = 0.08; m.torso.add(trunk);
+  const neck = mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.1, 10), skin);
+  neck.position.y = 0.56; m.torso.add(neck);
+  m.head = new THREE.Group(); m.head.position.y = 0.67; m.torso.add(m.head);
+  m.head.add(mesh(new THREE.SphereGeometry(0.14, 18, 14), skin));
+  const hr = mesh(new THREE.SphereGeometry(0.147, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.5), hair);
+  hr.position.y = 0.02; m.head.add(hr);
+
+  // arms (lead = +z side, rear = -z side)
+  for (const side of ['l', 'r']) {
+    const z = side === 'l' ? 0.11 : -0.11;
+    const up = limb(0.34, 0.055, skin);
+    up.position.set(0, 0.46, z); m.torso.add(up);
+    const elb = new THREE.Group(); elb.position.y = -0.34; up.add(elb);
+    const fore = limb(0.31, 0.05, skin); elb.add(fore);
+    const wr = new THREE.Group(); wr.position.y = -0.31; fore.add(wr);
+    const g = mesh(new THREE.SphereGeometry(0.1, 16, 12), glove);
+    g.position.y = -0.03; wr.add(g);
+    m[side + 'Up'] = up; m[side + 'Elb'] = elb; m[side + 'Glove'] = g;
+  }
+  // legs
+  for (const side of ['l', 'r']) {
+    const z = side === 'l' ? 0.08 : -0.08;
+    const th = limb(0.46, 0.085, shorts); th.position.set(0, 0, z); m.pelvis.add(th);
+    const kn = new THREE.Group(); kn.position.y = -0.46; th.add(kn);
+    const sh = limb(0.45, 0.065, skin); kn.add(sh);
+    const ft = mesh(new THREE.BoxGeometry(0.2, 0.07, 0.11), boot);
+    ft.position.set(0.05, -0.45 + 0.035, 0); sh.add(ft);
+    m[side + 'Thigh'] = th; m[side + 'Knee'] = kn;
+  }
+  return m;
+}
+
+// Put the figure into the pose. Arm angles are absolute, so the torso lean does not move the hands.
+function applyPose(f) {
+  const p = f.cur, lean = p.lean + Math.sin(time * 2.4 + f.ph) * 0.025, m = f.m;
+  const footL = -(0.46 * Math.cos(p.lTA) + 0.45 * Math.cos(p.lSh));
+  const footR = -(0.46 * Math.cos(p.rTA) + 0.45 * Math.cos(p.rSh));
+  m.root.position.set(f.x, f.fall * 0.15, 0);
+  m.root.rotation.z = f.fall * Math.PI / 2;
+  m.pelvis.position.set(p.hs, -Math.min(footL, footR), 0);
+  m.torso.rotation.z = -lean;
+  m.head.rotation.z = -p.ht;
+  m.lUp.rotation.z = p.lSA + lean;  m.lElb.rotation.z = p.lFA - p.lSA;
+  m.rUp.rotation.z = p.rSA + lean;  m.rElb.rotation.z = p.rFA - p.rSA;
+  m.lThigh.rotation.z = p.lTA;      m.lKnee.rotation.z = p.lSh - p.lTA;
+  m.rThigh.rotation.z = p.rTA;      m.rKnee.rotation.z = p.rSh - p.rTA;
+}
+
+// ---------- animation core ----------
+function tick(f, dt) {
+  f.stepT = Math.max(0, f.stepT - dt);
+  if (f.stepT > 0) f.x += f.vx * dt;
+  f.dodgeT = Math.max(0, f.dodgeT - dt);
+  f.st = Math.min(100, f.st + (busy(f) ? 3 : 12) * dt);
+  if (f.tr) {
+    f.tr.t += dt;
+    const k = Math.min(1, f.tr.t / f.tr.dur);
+    f.cur = lerpP(f.tr.from, f.tr.to, ease(k));
+    if (k >= 1) {
+      const h = f.tr.hit;
+      f.tr = null;
+      if (h) resolve(f, h);
+    }
+  }
+  if (!f.tr && f.seq.length) {
+    const n = f.seq.shift();
+    const to = typeof n.to === 'function' ? n.to() : n.to;
+    f.tr = {from: copyP(f.cur), to, dur: n.dur, t: 0, hit: n.hit};
+  }
+  f.x = clamp(f.x, -1.9, 1.9);
+}
+
+function doAttack(f, k) {
+  if (state !== 'fight' || f.down || busy(f) || f.stepT > 0 || f.block) return;
+  const a = ATK[k], sp = f.st < 25 ? 1.35 : 1;
+  f.st = Math.max(0, f.st - a.cost);
+  f.seq = [
+    {to: () => merge(f, a.wind), dur: a.wd * sp},
+    {to: () => merge(f, a.ext),  dur: a.ed * sp, hit: k},
+    {to: () => stance(f), dur: 0.25 * sp}
+  ];
+}
+
+function step(f, dir) {
+  if (state !== 'fight' || f.down || busy(f) || f.stepT > 0 || f.block) return;
+  const fwd = dir * f.dir;
+  const sp = fwd > 0 ? {lTA: 0.6, lSh: 0.25, rTA: -0.2, rSh: -0.3}
+                     : {lTA: 0.0, lSh: -0.1, rTA: -0.55, rSh: -0.3};
+  f.seq = [{to: () => merge(f, sp), dur: 0.1}, {to: () => stance(f), dur: 0.14}];
+  f.stepT = 0.24; f.vx = dir * 0.35 / 0.24;
+}
+
+function slip(f) {
+  if (state !== 'fight' || f.down || busy(f) || f.block) return;
+  f.dodgeT = 0.35;
+  f.seq = [{to: () => merge(f, {lean: -0.22, ht: 0.35, hs: -0.06}), dur: 0.09},
+           {to: () => stance(f), dur: 0.3}];
+}
+
+function setBlock(v) {
+  P1.block = v;
+  if (!busy(P1)) P1.seq = [{to: () => stance(P1), dur: 0.1}];
+}
+
+// Hit check uses real 3D positions of the glove, head and torso.
+function resolve(a, k) {
+  const d = ATK[k], t = a === P1 ? C : P1;
+  applyPose(a); applyPose(t);
+  const fp = a.m[d.fist === 'lF' ? 'lGlove' : 'rGlove'].getWorldPosition(new THREE.Vector3());
+  const hp = t.m.head.getWorldPosition(new THREE.Vector3());
+  const bp = t.m.tor.getWorldPosition(new THREE.Vector3()); bp.y += 0.2;
+  let zone = null;
+  if (d.zone === 'head' && fp.distanceTo(hp) < 0.26) zone = 'head';
+  if (d.zone === 'body' && fp.distanceTo(bp) < 0.3) zone = 'body';
+  if (!zone) { showMsg('МИМО', 0.4); return; }
+  if (zone === 'head' && t.dodgeT > 0) { showMsg('УКЛОН!', 0.6); return; }
+  if (t.block && zone === 'head') {
+    showMsg('БЛОК', 0.6);
+    t.seq = [{to: () => merge(t, {lean: 0.04}), dur: 0.05}, {to: () => stance(t), dur: 0.2}];
+    return;
+  }
+  let dmg = d.dmg, react;
+  if (zone === 'head') {
+    react = {lean: -0.22, ht: -0.45, hs: -0.06}; shake = Math.max(shake, 7);
+    showMsg('ПОПАДАНИЕ', 0.6);
+  } else {
+    react = {lean: 0.42, ht: 0.25}; shake = Math.max(shake, 3);
+    showMsg('КОРПУС', 0.6);
+    if (t.block) dmg *= 0.35;
+  }
+  t.hp = Math.max(0, t.hp - dmg);
+  t.tr = null;
+  t.seq = [{to: () => merge(t, react), dur: 0.07}, {to: () => stance(t), dur: 0.35}];
+  t.x += a.dir * 0.12;
+  if (t.hp <= 0) startKnockdown(t);
+}
+
+function startKnockdown(t) {
+  state = 'down'; downF = t; downT = 0;
+  t.down = true; t.seq = []; t.tr = null; t.block = false;
+}
+
+// ---------- CPU ----------
+function ai(dt) {
+  if (C.block && (blockT -= dt) <= 0) {
+    C.block = false;
+    if (!busy(C)) C.seq = [{to: () => G, dur: 0.15}];
+  }
+  thinkT -= dt;
+  if (thinkT > 0) return;
+  thinkT = 0.45 + Math.random() * 0.6;
+  if (busy(C) || C.stepT > 0 || C.down) return;
+  const d = Math.abs(C.x - P1.x);
+  if (P1.tr && P1.tr.hit && d < 1.1 && Math.random() < 0.35) {
+    C.block = true; blockT = 0.45; C.seq = [{to: () => BLK, dur: 0.08}]; return;
+  }
+  if (d > 0.92) { step(C, P1.x > C.x ? 1 : -1); return; }
+  const r = Math.random();
+  if (r < 0.45) {
+    const ks = ['jab', 'jab', 'cross', 'hook', 'body', 'upper'];
+    doAttack(C, ks[Math.floor(Math.random() * ks.length)]);
+  } else if (r < 0.6) {
+    C.block = true; blockT = 0.6; C.seq = [{to: () => BLK, dur: 0.08}];
+  } else if (r < 0.75 && d < 0.7) {
+    step(C, P1.x > C.x ? -1 : 1);
+  } else {
+    slip(C);
+  }
+}
+
+// ---------- round flow ----------
+function separate() {
+  const d = C.x - P1.x, min = 0.5;
+  if (Math.abs(d) < min) {
+    const m = (min - Math.abs(d)) / 2 * Math.sign(d || 1);
+    P1.x -= m; C.x += m;
+  }
+}
+
+function newRound() {
+  for (const f of [P1, C]) {
+    f.hp = 100; f.st = 100; f.fall = 0; f.down = false; f.block = false;
+    f.seq = []; f.tr = null; f.stepT = 0; f.dodgeT = 0; f.cur = copyP(G);
+  }
+  P1.x = -0.4; C.x = 0.4;
+  state = 'fight'; downF = null;
+  showMsg('РАУНД 1', 1.2);
+}
+
+// ---------- camera ----------
+function updateCamera() {
+  const mid = (P1.x + C.x) / 2;
+  const jx = (Math.random() - 0.5) * shake * 0.01;
+  camera.position.set(mid * 0.5 + 0.4 + jx, 1.45, 6.5);
+  camera.lookAt(mid * 0.5, 0.95, 0);
+}
+
+// ---------- scene ----------
+function rope(a, b, col) {
+  const d = new THREE.Vector3().subVectors(b, a), len = d.length();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, len, 8),
+                           new THREE.MeshStandardMaterial({color: col, roughness: 0.4}));
+  m.position.copy(a).add(b).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+  scene.add(m);
+}
+
+function init() {
+  renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  const cv = renderer.domElement;
+  cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%';
+  gameEl.insertBefore(cv, gameEl.firstChild);
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0c1019);
+  scene.fog = new THREE.Fog(0x0c1019, 7, 14);
+  camera = new THREE.PerspectiveCamera(40, 1, 0.1, 50);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const dl = new THREE.DirectionalLight(0xffffff, 0.8);
+  dl.position.set(2, 5, 4); scene.add(dl);
+  const sp = new THREE.SpotLight(0xdfe8ff, 1.1, 20, 0.5, 0.6);
+  sp.position.set(0, 5, 3); sp.target.position.set(0, 0.8, 0);
+  scene.add(sp); scene.add(sp.target);
+
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40),
+                               new THREE.MeshStandardMaterial({color: 0x14171f, roughness: 1}));
+  floor.rotation.x = -Math.PI / 2; scene.add(floor);
+  const ringFloor = new THREE.Mesh(new THREE.BoxGeometry(5, 0.04, 5),
+                                   new THREE.MeshStandardMaterial({color: 0x2d3341, roughness: 0.8}));
+  ringFloor.position.y = -0.02; scene.add(ringFloor);
+
+  const postMat = new THREE.MeshStandardMaterial({color: 0x555c6e, metalness: 0.3, roughness: 0.5});
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.45, 10), postMat);
+    p.position.set(sx * 2.5, 0.72, sz * 2.5); scene.add(p);
+  }
+  const heights = [0.45, 0.8, 1.15], cols = [0xe74c3c, 0xf2f2f2, 0x3b82f6];
+  heights.forEach((h, i) => {
+    rope(new THREE.Vector3(-2.5, h, -2.5), new THREE.Vector3(2.5, h, -2.5), cols[i]);
+    rope(new THREE.Vector3(-2.5, h, -2.5), new THREE.Vector3(-2.5, h, 2.5), cols[i]);
+    rope(new THREE.Vector3(2.5, h, -2.5), new THREE.Vector3(2.5, h, 2.5), cols[i]);
+  });
+
+  P1.m = buildFighter(0xb8322a, 0xe74c3c);
+  C.m  = buildFighter(0x2456a8, 0x3b82f6);
+  C.m.root.rotation.y = Math.PI;   // CPU faces the other way
+  scene.add(P1.m.root); scene.add(C.m.root);
+
+  resize();
+  window.addEventListener('resize', resize);
+}
+
+function resize() {
+  const w = gameEl.clientWidth, h = gameEl.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+
+// ---------- frame ----------
+function frame(dt) {
+  time += dt;
+  shake = Math.max(0, shake - dt * 30);
+  if (msgT > 0 && (msgT -= dt) <= 0 && state === 'fight') $('msg').textContent = '';
+
+  if (state === 'fight' && !paused) {
+    if (moveHold && !busy(P1) && P1.stepT <= 0 && !P1.block) step(P1, moveHold);
+    tick(P1, dt); tick(C, dt); ai(dt); separate();
+  } else if (state === 'down') {
+    downT += dt;
+    downF.fall = Math.min(1, downT / 0.8);
+    if (downT >= 0.8) showMsg('СЧЁТ ' + Math.min(10, Math.floor(downT - 0.8) + 1), 0.2);
+    if (downT >= 9.8) {
+      state = 'ko'; koT = 3;
+      showMsg('KNOCKDOWN · ' + (downF === P1 ? 'CPU WINS' : 'YOU WIN'), 99);
+    }
+  } else if (state === 'ko') {
+    koT -= dt;
+    if (koT <= 0) newRound();
+  }
+  applyPose(P1); applyPose(C);
+  updateCamera();
+  $('hpP').style.width = P1.hp + '%';
+  $('hpC').style.width = C.hp + '%';
+  $('stP').style.width = P1.st + '%';
+  $('stC').style.width = C.st + '%';
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  frame(dt);
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
+
+// ---------- controls ----------
+// Gestures on the arena: tap = jab, swipe right = cross, left = hook, up = uppercut, down = body, hold = block.
+let g = null;
+gameEl.addEventListener('pointerdown', e => {
+  if (e.target.closest('button') || g) return;
+  g = {id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY,
+       t0: performance.now(), moved: false, blocked: false, bt: null};
+  g.bt = setTimeout(() => {
+    if (g && !g.moved) { g.blocked = true; setBlock(true); }
+  }, 320);
+});
+gameEl.addEventListener('pointermove', e => {
+  if (!g || e.pointerId !== g.id) return;
+  g.x = e.clientX; g.y = e.clientY;
+  if (Math.hypot(g.x - g.x0, g.y - g.y0) > 24) { g.moved = true; clearTimeout(g.bt); }
+});
+const endGesture = e => {
+  if (!g || e.pointerId !== g.id) return;
+  clearTimeout(g.bt);
+  const dx = g.x - g.x0, dy = g.y - g.y0, dt = performance.now() - g.t0;
+  if (g.blocked) setBlock(false);
+  else if (Math.hypot(dx, dy) > 45 && dt < 500) {
+    if (Math.abs(dx) > Math.abs(dy)) doAttack(P1, dx > 0 ? 'cross' : 'hook');
+    else doAttack(P1, dy < 0 ? 'upper' : 'body');
+  } else if (!g.moved && dt < 320) doAttack(P1, 'jab');
+  g = null;
+};
+gameEl.addEventListener('pointerup', endGesture);
+gameEl.addEventListener('pointercancel', endGesture);
+
+document.querySelectorAll('#pad .mv').forEach(b => {
+  const d = Number(b.dataset.d);
+  b.addEventListener('pointerdown', e => { e.preventDefault(); moveHold = d; b.classList.add('on'); });
+  const stop = () => { if (moveHold === d) moveHold = 0; b.classList.remove('on'); };
+  b.addEventListener('pointerup', stop);
+  b.addEventListener('pointerleave', stop);
+  b.addEventListener('pointercancel', stop);
+});
+$('slip').addEventListener('pointerdown', e => { e.preventDefault(); slip(P1); });
+
+$('pause').addEventListener('click', () => {
+  if (state === 'ko') return;
+  paused = !paused;
+  $('pause').textContent = paused ? '▶ ИГРАТЬ' : 'II ПАУЗА';
+  if (paused) showMsg('ПАУЗА', 99); else showMsg('', 0);
+});
+
+// ---------- start ----------
+if (typeof THREE === 'undefined') {
+  $('msg').textContent = '3D-библиотека не загрузилась. Проверьте интернет и обновите страницу.';
+} else {
+  init();
+  newRound();
+  requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
