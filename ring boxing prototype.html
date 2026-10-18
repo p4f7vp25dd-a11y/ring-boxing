@@ -72,29 +72,35 @@ const $ = id => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d');
 const SKIN = '#d9a27a', HAIR = '#2a1c14', BOOT = '#141414';
 const KEYS = ['lean','ht','hs','lSA','lFA','rSA','rFA','lTA','lSh','rTA','rSh'];
-const R = 1.0;                 // half size of the ring (units)
+const R = 1.6;                 // half size of the ring (units)
 const YAW = 0.18, CAM_D = 3.2, LOOK_Y = 1.0;   // camera: close, slightly turned
 
 // Poses. Arm angles are absolute: 0 = hanging down, positive = forward.
 const G   = {lean:0.12, ht:0, hs:0, lSA:0.6, lFA:3.0, rSA:0.15, rFA:2.7, lTA:0.3, lSh:0.1, rTA:-0.3, rSh:-0.15};
 const BLK = {lean:0.02, ht:-0.1, hs:0, lSA:0.96, lFA:3.1, rSA:0.7, rFA:2.9, lTA:0.3, lSh:0.1, rTA:-0.3, rSh:-0.15};
 const ATK = {
-  jab:   {fist:'lF', zone:'head', dmg:7,  cost:6,  wd:0.08, ed:0.07,
-          wind:{lSA:0.3, lFA:2.4, lean:-0.06}, ext:{lSA:1.5, lFA:1.5, lean:0.2, ht:0.1}},
-  cross: {fist:'rF', zone:'head', dmg:12, cost:10, wd:0.11, ed:0.08,
-          wind:{rSA:0.4, rFA:2.2, lean:-0.12, rTA:-0.2}, ext:{rSA:1.5, rFA:1.48, lean:0.32, ht:0.15, rTA:-0.45, rSh:-0.2}},
-  hook:  {fist:'lF', zone:'head', dmg:11, cost:10, wd:0.12, ed:0.09,
-          wind:{lSA:0.2, lFA:2.3, lean:-0.12}, ext:{lSA:1.3, lFA:2.0, lean:0.18, ht:-0.05}},
-  body:  {fist:'lF', zone:'body', dmg:8, cost:8,  wd:0.09, ed:0.08,
-          wind:{lSA:0.5, lFA:2.6, lean:-0.05}, ext:{lSA:1.05, lFA:1.3, lean:0.35, ht:0.2, lTA:0.5}},
-  upper: {fist:'rF', zone:'head', dmg:13, cost:12, wd:0.14, ed:0.10,
-          wind:{rSA:0.1, rFA:0.3, lean:-0.15, rTA:-0.25, rSh:-0.3}, ext:{rSA:0.75, rFA:2.9, lean:0.3, rTA:-0.2, rSh:-0.25, lTA:0.4}}
+  jab:   {fist:'lF', zone:'head', dmg:7,  cost:6,  wd:0.09, ed:0.05,
+          wind:{lSA:0.25, lFA:2.4, lean:-0.10, hs:-0.03, rTA:-0.3},
+          ext: {lSA:1.5, lFA:1.5, lean:0.30, ht:0.15, hs:0.06, rTA:-0.2, lTA:0.4}},
+  cross: {fist:'rF', zone:'head', dmg:12, cost:10, wd:0.13, ed:0.06,
+          wind:{rSA:0.4, rFA:2.2, lean:-0.20, hs:-0.05, rTA:-0.25, lTA:0.1},
+          ext: {rSA:1.5, rFA:1.48, lean:0.42, ht:0.20, hs:0.10, rTA:-0.5, rSh:-0.25, lTA:0.45, lSh:0.2}},
+  hook:  {fist:'lF', zone:'head', dmg:11, cost:10, wd:0.14, ed:0.07,
+          wind:{lSA:0.2, lFA:2.3, lean:-0.22, hs:-0.04, rTA:-0.2},
+          ext: {lSA:1.3, lFA:2.0, lean:0.25, ht:-0.10, hs:0.07, lTA:0.4}},
+  body:  {fist:'lF', zone:'body', dmg:8, cost:8, wd:0.11, ed:0.07,
+          wind:{lSA:0.5, lFA:2.6, lean:-0.12, lSh:0.1, lTA:0.2},
+          ext: {lSA:1.05, lFA:1.3, lean:0.50, ht:0.25, lTA:0.6, lSh:0.25, hs:0.08}},
+  upper: {fist:'rF', zone:'head', dmg:13, cost:12, wd:0.17, ed:0.08,
+          wind:{rSA:0.1, rFA:0.3, lean:-0.25, rTA:-0.3, rSh:-0.4, hs:-0.05},
+          ext: {rSA:0.75, rFA:2.9, lean:0.40, rTA:-0.15, rSh:-0.3, lTA:0.45, lSh:0.1, hs:0.06}}
 };
 
 // ---------- helpers ----------
 const copyP = p => Object.assign({}, p);
 const lerpP = (a, b, t) => { const o = {}; for (const k of KEYS) o[k] = a[k] + (b[k] - a[k]) * t; return o; };
 const ease = k => k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2) / 2;
+const easeOutBack = k => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2); };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const stance = f => f.block ? BLK : G;
 const merge = (f, o) => Object.assign({}, stance(f), o);
@@ -103,7 +109,7 @@ const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
 // ---------- state ----------
 let W = 0, H = 0, DPR = 1, FOCAL = 1, time = 0, shake = 0, pivotX = 0;
-let state = 'wait', downF = null, downT = 0, koT = 0, msgT = 0, introT = 0;
+let state = 'wait', downF = null, downT = 0, koT = 0, msgT = 0, introT = 0, hitStop = 0;
 let paused = false, thinkT = 0, blockT = 0, moveHold = 0;
 function makeFighter(dir, ph, col, glove) {
   return {dir, ph, col, glove, x: 0, hp: 100, st: 100, cur: copyP(G), tr: null, seq: [],
@@ -308,7 +314,7 @@ function tick(f, dt) {
   if (f.tr) {
     f.tr.t += dt;
     const k = Math.min(1, f.tr.t / f.tr.dur);
-    f.cur = lerpP(f.tr.from, f.tr.to, ease(k));
+    f.cur = lerpP(f.tr.from, f.tr.to, (f.tr.ez || ease)(k));
     if (k >= 1) {
       const h = f.tr.hit;
       f.tr = null;
@@ -318,9 +324,9 @@ function tick(f, dt) {
   if (!f.tr && f.seq.length) {
     const n = f.seq.shift();
     const to = typeof n.to === 'function' ? n.to() : n.to;
-    f.tr = {from: copyP(f.cur), to, dur: n.dur, t: 0, hit: n.hit};
+    f.tr = {from: copyP(f.cur), to, dur: n.dur, t: 0, hit: n.hit, ez: n.ez};
   }
-  f.x = clamp(f.x, -0.85, 0.85);
+  f.x = clamp(f.x, -1.4, 1.4);
 }
 
 function doAttack(f, k) {
@@ -329,7 +335,7 @@ function doAttack(f, k) {
   f.st = Math.max(0, f.st - a.cost);
   f.seq = [
     {to: () => merge(f, a.wind), dur: a.wd * sp},
-    {to: () => merge(f, a.ext),  dur: a.ed * sp, hit: k},
+    {to: () => merge(f, a.ext),  dur: a.ed * sp, hit: k, ez: easeOutBack},
     {to: () => stance(f), dur: 0.25 * sp}
   ];
 }
@@ -372,17 +378,17 @@ function resolve(a, k) {
   }
   let dmg = d.dmg, react;
   if (zone === 'head') {
-    react = {lean: -0.22, ht: -0.45, hs: -0.06}; shake = Math.max(shake, 7);
+    react = {lean: -0.32, ht: -0.6, hs: -0.1}; shake = Math.max(shake, 9);
     showMsg('ПОПАДАНИЕ', 0.6);
   } else {
-    react = {lean: 0.42, ht: 0.25}; shake = Math.max(shake, 3);
+    react = {lean: 0.5, ht: 0.3, hs: 0.04}; shake = Math.max(shake, 4);
     showMsg('КОРПУС', 0.6);
     if (t.block) dmg *= 0.35;
   }
-  thump();
+  thump(); hitStop = 0.07;
   t.hp = Math.max(0, t.hp - dmg);
   t.tr = null;
-  t.seq = [{to: () => merge(t, react), dur: 0.07}, {to: () => stance(t), dur: 0.35}];
+  t.seq = [{to: () => merge(t, react), dur: 0.06, ez: easeOutBack}, {to: () => stance(t), dur: 0.4, ez: easeOutBack}];
   t.x += a.dir * 0.1;
   if (t.hp <= 0) startKnockdown(t);
 }
@@ -454,7 +460,8 @@ function frame(dt) {
     if (introT <= 0) newRound();
   } else if (state === 'fight' && !paused) {
     if (moveHold && !busy(P1) && P1.stepT <= 0 && !P1.block) step(P1, moveHold);
-    tick(P1, dt); tick(C, dt); ai(dt); separate();
+    const hd = hitStop > 0 ? 0 : dt; hitStop = Math.max(0, hitStop - dt);
+    tick(P1, hd); tick(C, hd); ai(dt); separate();
   } else if (state === 'down') {
     downT += dt;
     downF.fall = Math.min(1, downT / 0.8);
@@ -467,7 +474,9 @@ function frame(dt) {
     koT -= dt;
     if (koT <= 0) { resetFighters(); newRound(); }
   }
-  pivotX = clamp((P1.x + C.x) / 2, -0.25, 0.25);
+  // Camera glides after the midpoint of the fighters, so it travels with them to the corners.
+  const targetX = (P1.x + C.x) / 2;
+  pivotX += (targetX - pivotX) * Math.min(1, dt * 2.5);
   if (state !== 'wait') {
     applyHUD();
   }
