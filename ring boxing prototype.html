@@ -61,7 +61,7 @@ canvas{position:absolute;left:0;top:0;display:block}
   </div>
   <div id="start">
     <h1>RING</h1>
-    <p>Выход на ринг с музыкой. Нажмите, чтобы начать бой (мелодия включается только после нажатия — так требует iPhone).</p>
+    <p>Нажмите, чтобы выйти на ринг. Музыка включается только после нажатия — так требует iPhone.</p>
     <button id="go">ВЫЙТИ НА РИНГ</button>
   </div>
   <input id="file" type="file" accept="audio/*">
@@ -70,10 +70,10 @@ canvas{position:absolute;left:0;top:0;display:block}
 <script>
 const $ = id => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d');
-const SKIN = '#d9a27a', HAIR = '#2a1c14', BOOT = '#141414';
+const SKIN = '#d9a27a', SKIN_DK = '#a8714a', HAIR = '#2a1c14', BOOT = '#141414', TRUNKS_DK = '#0e1220';
 const KEYS = ['lean','ht','hs','lSA','lFA','rSA','rFA','lTA','lSh','rTA','rSh'];
-const R = 1.6;                 // half size of the ring (units)
-const YAW = 0.18, CAM_D = 3.2, LOOK_Y = 1.0;   // camera: close, slightly turned
+const R = 1.6;                                  // half size of the ring
+const YAW = 0.18, CAM_D = 3.2, LOOK_Y = 1.0;    // camera
 
 // Poses. Arm angles are absolute: 0 = hanging down, positive = forward.
 const G   = {lean:0.12, ht:0, hs:0, lSA:0.6, lFA:3.0, rSA:0.15, rFA:2.7, lTA:0.3, lSh:0.1, rTA:-0.3, rSh:-0.15};
@@ -108,18 +108,19 @@ const busy = f => !!(f.tr || f.seq.length);
 const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
 // ---------- state ----------
-let W = 0, H = 0, DPR = 1, FOCAL = 1, time = 0, shake = 0, pivotX = 0;
-let state = 'wait', downF = null, downT = 0, koT = 0, msgT = 0, introT = 0, hitStop = 0;
+let W = 0, H = 0, DPR = 1, FOCAL = 1, time = 0, shake = 0, pivotX = 0, hitStop = 0;
+let state = 'wait', downF = null, downT = 0, koT = 0, msgT = 0, introT = 0;
 let paused = false, thinkT = 0, blockT = 0, moveHold = 0;
 function makeFighter(dir, ph, col, glove) {
   return {dir, ph, col, glove, x: 0, hp: 100, st: 100, cur: copyP(G), tr: null, seq: [],
-          block: false, stepT: 0, vx: 0, dodgeT: 0, fall: 0, down: false};
+          block: false, stepT: 0, vx: 0, dodgeT: 0, fall: 0, down: false,
+          sp: G.lean, spv: 0, sw: 0, tz: 0, slipT: 0, slipSide: 1};
 }
 const P1 = makeFighter(1, 0, '#b8322a', '#ff5a4a');
 const C  = makeFighter(-1, 2.3, '#2456a8', '#4da3ff');
 function showMsg(t, dur) { $('msg').textContent = t; msgT = dur; }
 
-// ---------- sound (procedural music + effects, no files needed) ----------
+// ---------- sound: procedural music and effects (no files needed) ----------
 let AC = null, noiseBuf = null, musicOn = true, synthTimer = null, beatStep = 0, ownAudio = null;
 function audioInit() {
   if (AC) return;
@@ -155,26 +156,34 @@ const BASS = [55, 55, 65, 55, 73, 55, 49, 55];
 function beat() {
   if (!AC || !musicOn) return;
   const s = beatStep % 16;
-  if (s % 8 === 0) tone(120, 0.25, 'sine', 0.9, 40);          // kick
-  if (s === 4 || s === 12) noise(0.15, 0.45, 'highpass', 1500); // snare
-  if (s % 2 === 0) noise(0.04, 0.1, 'highpass', 7000);          // hat
+  if (s % 8 === 0) tone(120, 0.25, 'sine', 0.9, 40);
+  if (s === 4 || s === 12) noise(0.15, 0.45, 'highpass', 1500);
+  if (s % 2 === 0) noise(0.04, 0.1, 'highpass', 7000);
   if (s % 2 === 0) tone(BASS[(beatStep / 2 | 0) % 8], 0.2, 'sawtooth', 0.07);
   beatStep++;
 }
 function startSynth() { if (!synthTimer) synthTimer = setInterval(beat, 150); }
 function stopSynth() { clearInterval(synthTimer); synthTimer = null; }
 function applyMusic() {
-  if (musicOn) {
-    if (ownAudio) ownAudio.play(); else startSynth();
-  } else {
-    stopSynth(); if (ownAudio) ownAudio.pause();
-  }
+  if (musicOn) { if (ownAudio) ownAudio.play(); else startSynth(); }
+  else { stopSynth(); if (ownAudio) ownAudio.pause(); }
   $('snd').textContent = '♪ МУЗЫКА: ' + (musicOn ? 'ВКЛ' : 'ВЫКЛ');
+}
+
+// ---------- body: elastic spring for the torso, shoulder swap and side shift for slips ----------
+function animateBody(f, dt) {
+  const target = f.cur.lean + Math.sin(time * 2.4 + f.ph) * 0.025;
+  f.spv += ((target - f.sp) * 160 - f.spv * 11) * dt;
+  f.sp += f.spv * dt;
+  f.slipT = Math.max(0, f.slipT - dt);
+  const swT = f.slipT > 0 ? 1 : 0, tzT = f.slipT > 0 ? f.slipSide * 0.2 : 0;
+  f.sw += (swT - f.sw) * Math.min(1, dt * 14);
+  f.tz += (tzT - f.tz) * Math.min(1, dt * 12);
 }
 
 // ---------- 3D skeleton: x forward, y up, z side (lead limbs toward the camera) ----------
 function worldPts(f) {
-  const p = f.cur, lean = p.lean + Math.sin(time * 2.4 + f.ph) * 0.025;
+  const p = f.cur, lean = f.sp;
   const footL = -(0.46 * Math.cos(p.lTA) + 0.45 * Math.cos(p.lSh));
   const footR = -(0.46 * Math.cos(p.rTA) + 0.45 * Math.cos(p.rSh));
   const hipY = -Math.min(footL, footR);
@@ -182,12 +191,14 @@ function worldPts(f) {
   const hip = {x: p.hs, y: hipY, z: 0};
   const kL = pt(hip, 0.46, p.lTA, 0.08), aL = pt(kL, 0.45, p.lSh, 0.08);
   const kR = pt(hip, 0.46, p.rTA, -0.08), aR = pt(kR, 0.45, p.rSh, -0.08);
-  const chest = {x: hip.x + 0.52 * Math.sin(lean), y: hip.y + 0.52 * Math.cos(lean), z: 0};
-  const head = {x: chest.x + 0.15 * Math.sin(lean + p.ht), y: chest.y + 0.15 * Math.cos(lean + p.ht), z: 0};
-  const lE = pt(chest, 0.34, p.lSA, 0.11), lF = pt(lE, 0.31, p.lFA, 0.11);
-  const rE = pt(chest, 0.34, p.rSA, -0.11), rF = pt(rE, 0.31, p.rFA, -0.11);
-  const P = {hip, kL, aL, kR, aR, chest, head, lE, lF, rE, rF};
-  if (f.fall > 0) {
+  const chest = {x: hip.x + 0.52 * Math.sin(lean), y: hip.y + 0.52 * Math.cos(lean), z: f.tz * 0.6};
+  const waist = {x: (hip.x + chest.x) / 2 + f.spv * 0.006, y: (hipY + chest.y) / 2, z: f.tz * 0.3};
+  const head = {x: chest.x + 0.15 * Math.sin(lean + p.ht), y: chest.y + 0.15 * Math.cos(lean + p.ht), z: f.tz};
+  const lz = 0.11 - 0.22 * f.sw, rz = -0.11 + 0.22 * f.sw;      // shoulders swap during a slip
+  const lE = pt(chest, 0.34, p.lSA, lz), lF = pt(lE, 0.31, p.lFA, lz);
+  const rE = pt(chest, 0.34, p.rSA, rz), rF = pt(rE, 0.31, p.rFA, rz);
+  const P = {hip, kL, aL, kR, aR, chest, waist, head, lE, lF, rE, rF};
+  if (f.fall > 0) {                                  // knockdown: tip backward around the hips
     const th = f.fall * Math.PI / 2, c = Math.cos(th), s = Math.sin(th);
     let minY = 1e9;
     for (const k in P) {
@@ -210,7 +221,7 @@ function project(p) {
 }
 
 let items = [];
-function part(a, b, r, col) {
+function part(a, b, r, col, tag) {
   const A = project(a), B = project(b);
   items.push({d: (A.d + B.d) / 2, kind: 0, A, B, r, col});
 }
@@ -220,14 +231,19 @@ function dot(p, r, col) {
 }
 function drawFighter(f) {
   const P = worldPts(f);
-  // far limbs first, then torso, head, near limbs
-  part(P.hip, P.kR, 0.085, f.col); part(P.kR, P.aR, 0.065, SKIN); dot(P.aR, 0.05, BOOT);
-  part(P.chest, P.rE, 0.055, SKIN); part(P.rE, P.rF, 0.05, SKIN); dot(P.rF, 0.1, f.glove);
-  part(P.hip, P.chest, 0.13, SKIN); dot(P.hip, 0.13, f.col);
-  dot({x: P.head.x, y: P.head.y + 0.08, z: P.head.z}, 0.11, HAIR);
+  const trunks = f.col;
+  // far leg and arm
+  part(P.hip, P.kR, 0.09, trunks); part(P.kR, P.aR, 0.068, SKIN); dot(P.aR, 0.05, BOOT);
+  part(P.chest, P.rE, 0.058, SKIN); part(P.rE, P.rF, 0.052, SKIN); dot(P.rF, 0.115, f.glove);
+  // torso: bends at the waist, so it looks elastic
+  part(P.hip, P.waist, 0.135, SKIN); part(P.waist, P.chest, 0.125, SKIN);
+  dot(P.hip, 0.14, TRUNKS_DK); dot(P.hip, 0.12, trunks);
+  // head
+  dot({x: P.head.x, y: P.head.y + 0.08, z: P.head.z}, 0.115, HAIR);
   dot(P.head, 0.14, SKIN);
-  part(P.hip, P.kL, 0.085, f.col); part(P.kL, P.aL, 0.065, SKIN); dot(P.aL, 0.05, BOOT);
-  part(P.chest, P.lE, 0.055, SKIN); part(P.lE, P.lF, 0.05, SKIN); dot(P.lF, 0.1, f.glove);
+  // near leg and arm
+  part(P.hip, P.kL, 0.09, trunks); part(P.kL, P.aL, 0.068, SKIN); dot(P.aL, 0.05, BOOT);
+  part(P.chest, P.lE, 0.058, SKIN); part(P.lE, P.lF, 0.052, SKIN); dot(P.lF, 0.115, f.glove);
 }
 
 function polygon(pts, fill) {
@@ -242,16 +258,13 @@ function line(a, b, width, col) {
 
 function drawRing() {
   const P = (x, y, z) => project({x, y, z});
-  // soft spotlight on the canvas
   const sp = ctx.createRadialGradient(W / 2, H * 0.3, 10, W / 2, H * 0.3, W * 0.9);
   sp.addColorStop(0, 'rgba(150,170,230,.22)'); sp.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = sp; ctx.fillRect(0, 0, W, H);
-  // canvas (the ring floor)
   const floor = [[-R, -R], [R, -R], [R, R], [-R, R]].map(([x, z]) => P(x, 0, z));
   polygon(floor, '#303849');
   ctx.strokeStyle = '#4a5468'; ctx.lineWidth = 2; ctx.beginPath();
   floor.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.stroke();
-  // back and side ropes (front is open to the camera)
   const heights = [0.42, 0.72, 1.02], cols = ['#e74c3c', '#f2f2f2', '#3b82f6'];
   heights.forEach((h, i) => {
     const segs = [[[-R, h, -R], [R, h, -R]], [[-R, h, -R], [-R, h, R]], [[R, h, -R], [R, h, R]]];
@@ -261,7 +274,6 @@ function drawRing() {
       line(A, B, 0.036 * k, cols[i]);
     }
   });
-  // corner posts with red (player) and blue (CPU) pads
   for (const [x, z] of [[-R, -R], [R, -R], [-R, R], [R, R]]) {
     const b = P(x, 0, z), t = P(x, 1.12, z);
     line(b, t, 0.06 * b.k, '#5b6378');
@@ -269,7 +281,6 @@ function drawRing() {
     ctx.fillStyle = x < 0 ? '#c0392b' : '#2e6fd6';
     ctx.beginPath(); ctx.arc(pad.x, pad.y, 0.09 * pad.k, 0, Math.PI * 2); ctx.fill();
   }
-  // contact shadows
   for (const f of [P1, C]) {
     const c = P(f.x, 0, 0);
     const g = ctx.createRadialGradient(c.x, c.y, 2, c.x, c.y, 0.5 * c.k);
@@ -292,11 +303,13 @@ function render() {
   for (const it of items) {
     if (it.kind === 0) {
       const w = 2 * it.r * (it.A.k + it.B.k) / 2;
-      line(it.A, it.B, w + 1.5, 'rgba(0,0,0,.35)');     // outline
+      line(it.A, it.B, w + 2, 'rgba(0,0,0,.4)');
       line(it.A, it.B, w, it.col);
-      line(it.A, it.B, w * 0.35, 'rgba(255,255,255,.18)'); // highlight
+      line(it.A, it.B, w * 0.35, 'rgba(255,255,255,.18)');
     } else {
       const r = it.r * it.A.k;
+      ctx.fillStyle = 'rgba(0,0,0,.4)';
+      ctx.beginPath(); ctx.arc(it.A.x, it.A.y, r + 1.5, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = it.col;
       ctx.beginPath(); ctx.arc(it.A.x, it.A.y, r, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = 'rgba(255,255,255,.25)';
@@ -334,9 +347,9 @@ function doAttack(f, k) {
   const a = ATK[k], sp = f.st < 25 ? 1.35 : 1;
   f.st = Math.max(0, f.st - a.cost);
   f.seq = [
-    {to: () => merge(f, a.wind), dur: a.wd * sp},
+    {to: () => merge(f, a.wind), dur: a.wd * sp, ez: ease},
     {to: () => merge(f, a.ext),  dur: a.ed * sp, hit: k, ez: easeOutBack},
-    {to: () => stance(f), dur: 0.25 * sp}
+    {to: () => stance(f), dur: 0.25 * sp, ez: ease}
   ];
 }
 
@@ -349,11 +362,16 @@ function step(f, dir) {
   f.stepT = 0.24; f.vx = dir * 0.35 / 0.24;
 }
 
+// Slip: the head and torso move aside and the shoulders swap sides.
 function slip(f) {
   if (state !== 'fight' || f.down || busy(f) || f.block) return;
-  f.dodgeT = 0.35;
-  f.seq = [{to: () => merge(f, {lean: -0.22, ht: 0.35, hs: -0.06}), dur: 0.09},
-           {to: () => stance(f), dur: 0.3}];
+  f.dodgeT = 0.4;
+  f.slipT = 0.4;
+  f.slipSide = Math.random() < 0.5 ? -1 : 1;
+  f.seq = [
+    {to: () => merge(f, {lean: -0.30, ht: 0.35, hs: -0.08, lTA: 0.4, lSh: 0.25, rTA: -0.4, rSh: -0.1}), dur: 0.09, ez: easeOutBack},
+    {to: () => stance(f), dur: 0.32, ez: easeOutBack}
+  ];
 }
 
 function setBlock(v) {
@@ -439,6 +457,7 @@ function resetFighters() {
   for (const f of [P1, C]) {
     f.hp = 100; f.st = 100; f.fall = 0; f.down = false; f.block = false;
     f.seq = []; f.tr = null; f.stepT = 0; f.dodgeT = 0; f.cur = copyP(G);
+    f.sp = G.lean; f.spv = 0; f.sw = 0; f.tz = 0; f.slipT = 0;
   }
   P1.x = -0.35; C.x = 0.35;
 }
@@ -455,12 +474,15 @@ function frame(dt) {
   shake = Math.max(0, shake - dt * 30);
   if (msgT > 0 && (msgT -= dt) <= 0 && state === 'fight') $('msg').textContent = '';
 
+  animateBody(P1, dt); animateBody(C, dt);
+
   if (state === 'intro') {
     introT -= dt;
     if (introT <= 0) newRound();
   } else if (state === 'fight' && !paused) {
     if (moveHold && !busy(P1) && P1.stepT <= 0 && !P1.block) step(P1, moveHold);
-    const hd = hitStop > 0 ? 0 : dt; hitStop = Math.max(0, hitStop - dt);
+    const hd = hitStop > 0 ? 0 : dt;
+    hitStop = Math.max(0, hitStop - dt);
     tick(P1, hd); tick(C, hd); ai(dt); separate();
   } else if (state === 'down') {
     downT += dt;
@@ -472,14 +494,12 @@ function frame(dt) {
     }
   } else if (state === 'ko') {
     koT -= dt;
-    if (koT <= 0) { resetFighters(); newRound(); }
+    if (koT <= 0) newRound();
   }
-  // Camera glides after the midpoint of the fighters, so it travels with them to the corners.
+  // The camera glides after the middle point between the fighters, so it travels with them.
   const targetX = (P1.x + C.x) / 2;
   pivotX += (targetX - pivotX) * Math.min(1, dt * 2.5);
-  if (state !== 'wait') {
-    applyHUD();
-  }
+  if (state !== 'wait') applyHUD();
 }
 function applyHUD() {
   $('hpP').style.width = P1.hp + '%';
@@ -510,8 +530,8 @@ function loop(now) {
 }
 
 // ---------- controls ----------
-// Right side of the screen: taps and swipes are punches, holding is block.
-// Left side: buttons ◀ ▶ (hold to walk) and УКЛОН.
+// Right side: taps and swipes are punches, holding is block.
+// Left side: ◀ ▶ (hold to walk) and УКЛОН.
 let g = null;
 $('game').addEventListener('pointerdown', e => {
   if (e.target.closest('button') || g || state !== 'fight') return;
@@ -575,7 +595,7 @@ $('file').addEventListener('change', e => {
   $('own').textContent = '♫ СВОЯ: ' + f.name.slice(0, 14);
 });
 
-// Start: audio can only begin after a tap on iPhone.
+// Start: iPhone allows audio only after a tap.
 $('go').addEventListener('click', () => {
   audioInit();
   if (AC.state === 'suspended') AC.resume();
