@@ -49,6 +49,7 @@ canvas{position:absolute;left:0;top:0;display:block}
   </div>
   <div id="msg"></div>
   <div id="side">
+    <button id="cam">↻ КАМЕРА</button>
     <button id="pause">II ПАУЗА</button>
     <button id="snd">♪ МУЗЫКА: ВКЛ</button>
     <button id="own">♫ СВОЯ МУЗЫКА</button>
@@ -116,8 +117,8 @@ function makeFighter(dir, ph, col, glove) {
           block: false, stepT: 0, vx: 0, dodgeT: 0, fall: 0, down: false,
           sp: G.lean, spv: 0, sw: 0, tz: 0, slipT: 0, slipSide: 1};
 }
-const P1 = makeFighter(1, 0, '#b8322a', '#ff5a4a');
-const C  = makeFighter(-1, 2.3, '#2456a8', '#4da3ff');
+const P1 = makeFighter(1, 0, '#6e1b1b', '#ef4a3a');
+const C  = makeFighter(-1, 2.3, '#1d3a78', '#4a8cf5');
 function showMsg(t, dur) { $('msg').textContent = t; msgT = dur; }
 
 // ---------- sound: procedural music and effects (no files needed) ----------
@@ -212,48 +213,59 @@ function worldPts(f) {
   return P;
 }
 
-// ---------- projection ----------
+// ---------- camera: can orbit the whole ring ----------
+let camAz = 0.18, camAzT = 0.18;
 function project(p) {
-  const x = p.x - pivotX, c = Math.cos(YAW), s = Math.sin(YAW);
+  const x = p.x - pivotX, c = Math.cos(camAz), s = Math.sin(camAz);
   const xr = x * c + p.z * s, zr = -x * s + p.z * c;
   const d = CAM_D - zr, k = FOCAL / d;
   return {x: W / 2 + xr * k, y: H * 0.6 - (p.y - LOOK_Y) * k, d, k};
 }
 
+// ---------- drawing list (sorted by depth, so the camera can see the fighters from any side) ----------
 let items = [];
-function part(a, b, r, col, tag) {
+const SK = '#a86e4a', SK_DK = '#6e4128', HAIR = '#1d130d', BOOT = '#111';
+function add(a, b, wa, wb, col) {          // a blocky limb or torso piece between two joints
   const A = project(a), B = project(b);
-  items.push({d: (A.d + B.d) / 2, kind: 0, A, B, r, col});
+  items.push({d: (A.d + B.d) / 2, kind: 2, A, B, wa, wb, col});
 }
-function dot(p, r, col) {
+function dot(p, r, col) {                  // a fist, head, foot or pelvis
   const A = project(p);
   items.push({d: A.d, kind: 1, A, r, col});
 }
+function rope(a, b, radius, col) {         // ring ropes and posts
+  const A = project(a), B = project(b);
+  items.push({d: (A.d + B.d) / 2, kind: 0, A, B, r: radius, col});
+}
 function drawFighter(f) {
-  const P = worldPts(f);
-  const trunks = f.col;
-  // far leg and arm
-  part(P.hip, P.kR, 0.09, trunks); part(P.kR, P.aR, 0.068, SKIN); dot(P.aR, 0.05, BOOT);
-  part(P.chest, P.rE, 0.058, SKIN); part(P.rE, P.rF, 0.052, SKIN); dot(P.rF, 0.115, f.glove);
-  // torso: bends at the waist, so it looks elastic
-  part(P.hip, P.waist, 0.135, SKIN); part(P.waist, P.chest, 0.125, SKIN);
-  dot(P.hip, 0.14, TRUNKS_DK); dot(P.hip, 0.12, trunks);
+  const P = worldPts(f), T = f.col, GL = f.glove;
+  // far arm and leg
+  add(P.hip, P.kR, 0.17, 0.13, T);
+  add(P.kR, P.aR, 0.13, 0.095, SK_DK);
+  dot(P.aR, 0.07, BOOT);
+  add(P.chest, P.rE, 0.12, 0.10, SK_DK);
+  add(P.rE, P.rF, 0.10, 0.085, SK_DK);
+  dot(P.rF, 0.135, GL);
+  // torso: a thick block that bends at the waist
+  add(P.hip, P.waist, 0.27, 0.25, SK);
+  add(P.waist, P.chest, 0.25, 0.33, SK);
+  dot(P.hip, 0.15, T);
   // head
-  dot({x: P.head.x, y: P.head.y + 0.08, z: P.head.z}, 0.115, HAIR);
-  dot(P.head, 0.14, SKIN);
+  dot({x: P.head.x, y: P.head.y + 0.07, z: P.head.z}, 0.12, HAIR);
+  dot(P.head, 0.13, SK);
   // near leg and arm
-  part(P.hip, P.kL, 0.09, trunks); part(P.kL, P.aL, 0.068, SKIN); dot(P.aL, 0.05, BOOT);
-  part(P.chest, P.lE, 0.058, SKIN); part(P.lE, P.lF, 0.052, SKIN); dot(P.lF, 0.115, f.glove);
+  add(P.hip, P.kL, 0.17, 0.13, T);
+  add(P.kL, P.aL, 0.13, 0.095, SK);
+  dot(P.aL, 0.07, BOOT);
+  add(P.chest, P.lE, 0.12, 0.10, SK);
+  add(P.lE, P.lF, 0.10, 0.085, SK);
+  dot(P.lF, 0.135, GL);
 }
 
 function polygon(pts, fill) {
   ctx.fillStyle = fill; ctx.beginPath();
   pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
   ctx.closePath(); ctx.fill();
-}
-function line(a, b, width, col) {
-  ctx.strokeStyle = col; ctx.lineWidth = width; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
 }
 
 function drawRing() {
@@ -265,22 +277,17 @@ function drawRing() {
   polygon(floor, '#303849');
   ctx.strokeStyle = '#4a5468'; ctx.lineWidth = 2; ctx.beginPath();
   floor.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.stroke();
+  // ropes and posts go into the depth-sorted list, so fighters can pass in front of or behind them
   const heights = [0.42, 0.72, 1.02], cols = ['#e74c3c', '#f2f2f2', '#3b82f6'];
   heights.forEach((h, i) => {
     const segs = [[[-R, h, -R], [R, h, -R]], [[-R, h, -R], [-R, h, R]], [[R, h, -R], [R, h, R]]];
-    for (const [a, b] of segs) {
-      const A = P(...a), B = P(...b), k = project({x: (a[0] + b[0]) / 2, y: h, z: (a[2] + b[2]) / 2}).k;
-      line(A, B, 0.05 * k, 'rgba(0,0,0,.45)');
-      line(A, B, 0.036 * k, cols[i]);
-    }
+    for (const [a, b] of segs) rope({x: a[0], y: a[1], z: a[2]}, {x: b[0], y: b[1], z: b[2]}, 0.018, cols[i]);
   });
   for (const [x, z] of [[-R, -R], [R, -R], [-R, R], [R, R]]) {
-    const b = P(x, 0, z), t = P(x, 1.12, z);
-    line(b, t, 0.06 * b.k, '#5b6378');
-    const pad = P(x, 1.02, z);
-    ctx.fillStyle = x < 0 ? '#c0392b' : '#2e6fd6';
-    ctx.beginPath(); ctx.arc(pad.x, pad.y, 0.09 * pad.k, 0, Math.PI * 2); ctx.fill();
+    rope({x, y: 0, z}, {x, y: 1.12, z}, 0.03, '#5b6378');
+    dot({x, y: 1.02, z}, 0.09, x < 0 ? '#c0392b' : '#2e6fd6');
   }
+  // contact shadows
   for (const f of [P1, C]) {
     const c = P(f.x, 0, 0);
     const g = ctx.createRadialGradient(c.x, c.y, 2, c.x, c.y, 0.5 * c.k);
@@ -290,30 +297,41 @@ function drawRing() {
   }
 }
 
+function drawBar(A, B, wa, wb, col) {
+  const dx = B.x - A.x, dy = B.y - A.y, L = Math.hypot(dx, dy) || 1;
+  const nx = -dy / L, ny = dx / L, ha = wa * A.k / 2, hb = wb * B.k / 2;
+  ctx.beginPath();
+  ctx.moveTo(A.x + nx * ha, A.y + ny * ha); ctx.lineTo(B.x + nx * hb, B.y + ny * hb);
+  ctx.lineTo(B.x - nx * hb, B.y - ny * hb); ctx.lineTo(A.x - nx * ha, A.y - ny * ha);
+  ctx.closePath();
+  ctx.fillStyle = col; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 1; ctx.stroke();
+}
+
 function render() {
   const jx = shake > 0 ? (Math.random() - 0.5) * shake : 0, jy = shake > 0 ? (Math.random() - 0.5) * shake : 0;
   ctx.setTransform(DPR, 0, 0, DPR, jx * DPR, jy * DPR);
   const bg = ctx.createLinearGradient(0, 0, 0, H);
   bg.addColorStop(0, '#0c1018'); bg.addColorStop(1, '#1b2030');
   ctx.fillStyle = bg; ctx.fillRect(-20, -20, W + 40, H + 40);
-  drawRing();
   items = [];
+  drawRing();
   drawFighter(C); drawFighter(P1);
   items.sort((a, b) => b.d - a.d);
   for (const it of items) {
-    if (it.kind === 0) {
-      const w = 2 * it.r * (it.A.k + it.B.k) / 2;
-      line(it.A, it.B, w + 2, 'rgba(0,0,0,.4)');
-      line(it.A, it.B, w, it.col);
-      line(it.A, it.B, w * 0.35, 'rgba(255,255,255,.18)');
-    } else {
+    if (it.kind === 2) {
+      drawBar(it.A, it.B, it.wa, it.wb, it.col);
+    } else if (it.kind === 1) {
       const r = it.r * it.A.k;
-      ctx.fillStyle = 'rgba(0,0,0,.4)';
-      ctx.beginPath(); ctx.arc(it.A.x, it.A.y, r + 1.5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(0,0,0,.45)';
+      ctx.beginPath(); ctx.arc(it.A.x, it.A.y, r + 1.2, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = it.col;
       ctx.beginPath(); ctx.arc(it.A.x, it.A.y, r, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,.25)';
+      ctx.fillStyle = 'rgba(255,255,255,.22)';
       ctx.beginPath(); ctx.arc(it.A.x - r * 0.3, it.A.y - r * 0.3, r * 0.35, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.strokeStyle = it.col; ctx.lineCap = 'round'; ctx.lineWidth = 2 * it.r * (it.A.k + it.B.k) / 2;
+      ctx.beginPath(); ctx.moveTo(it.A.x, it.A.y); ctx.lineTo(it.B.x, it.B.y); ctx.stroke();
     }
   }
 }
@@ -497,6 +515,7 @@ function frame(dt) {
     if (koT <= 0) newRound();
   }
   // The camera glides after the middle point between the fighters, so it travels with them.
+  camAz += (camAzT - camAz) * Math.min(1, dt * 4);
   const targetX = (P1.x + C.x) / 2;
   pivotX += (targetX - pivotX) * Math.min(1, dt * 2.5);
   if (state !== 'wait') applyHUD();
@@ -578,6 +597,7 @@ $('pause').addEventListener('click', () => {
   $('pause').textContent = paused ? '▶ ИГРАТЬ' : 'II ПАУЗА';
   if (paused) showMsg('ПАУЗА', 99); else showMsg('', 0);
 });
+$('cam').addEventListener('click', () => { camAzT += Math.PI / 2; });
 $('snd').addEventListener('click', () => {
   musicOn = !musicOn;
   if (AC) applyMusic(); else $('snd').textContent = '♪ МУЗЫКА: ' + (musicOn ? 'ВКЛ' : 'ВЫКЛ');
