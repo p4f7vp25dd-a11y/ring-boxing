@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>RING</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+html,body{height:100%;background:#0b0d12;color:#fff;font-family:-apple-system,system-ui,sans-serif;overflow:hidden;touch-action:none;color-scheme:dark}
+#wrap{display:flex;flex-direction:column;height:100%}
+#game{flex:1;position:relative;min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#hud{position:absolute;top:0;left:0;right:0;padding:10px;display:flex;justify-content:space-between;gap:8px;pointer-events:none;z-index:2}
+.bar{width:44%;background:rgba(12,15,24,.86);border:1px solid #232a3b;border-radius:12px;padding:8px}
+.name{font-size:11px;font-weight:800;letter-spacing:2px;margin-bottom:6px;white-space:nowrap}
+.hp{height:10px;background:#262c3c;border-radius:6px;overflow:hidden;margin-bottom:4px}
+.hp>i{display:block;height:100%;width:100%;transition:width .2s}
+.st{height:5px;background:#262c3c;border-radius:4px;overflow:hidden}
+.st>i{display:block;height:100%;width:100%;background:#f2c94c}
+#msg{position:absolute;top:40%;left:0;right:0;text-align:center;font-size:24px;font-weight:900;letter-spacing:3px;text-shadow:0 2px 10px #000;z-index:2;pointer-events:none}
+#pause{position:absolute;top:118px;right:10px;z-index:3;background:#1a2030;border:1px solid #3a4256;color:#fff;border-radius:12px;padding:8px 14px;font-weight:800;font-size:13px}
+#pad{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;padding:8px;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));background:#0b0d12}
+#pad button{height:56px;border-radius:14px;border:1px solid #3a4256;background:#151a26;color:#fff;font-weight:800;font-size:13px;letter-spacing:1px}
+#pad button.hit{background:#2a3350}
+#pad button.red{border-color:#8a3a35}
+#pad button.blue{border-color:#35548a}
+#pad button.gold{border-color:#8a7435}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="game">
+    <canvas id="c"></canvas>
+    <div id="hud">
+      <div class="bar">
+        <div class="name" style="color:#ff7a6b">YOU · RED CORNER</div>
+        <div class="hp"><i id="hpP" style="background:#e8c15a"></i></div>
+        <div class="st"><i id="stP"></i></div>
+      </div>
+      <div class="bar">
+        <div class="name" style="color:#8fb8ff">CPU · BLUE CORNER</div>
+        <div class="hp"><i id="hpC" style="background:linear-gradient(90deg,#6fb6ff,#8b7bff)"></i></div>
+        <div class="st"><i id="stC"></i></div>
+      </div>
+    </div>
+    <div id="msg"></div>
+    <button id="pause">II ПАУЗА</button>
+  </div>
+  <div id="pad">
+    <button data-k="L">◀</button>
+    <button data-k="R">▶</button>
+    <button data-k="block" class="blue">БЛОК</button>
+    <button data-k="slip" class="blue">УКЛОН</button>
+    <button data-k="body" class="gold">КОРПУС</button>
+    <button data-k="jab" class="red">ДЖЕБ</button>
+    <button data-k="cross" class="red">КРОСС</button>
+    <button data-k="hook" class="red">ХУК</button>
+    <button data-k="upper" class="red">АППЕР</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('c'), ctx = cv.getContext('2d');
+let W = 0, H = 0, S = 1, GROUND = 0, time = 0, shake = 0;
+const SKIN = '#d9a27a', HAIR = '#2a1c14';
+const KEYS = ['lean','ht','hs','lSA','lFA','rSA','rFA','lTA','lSh','rTA','rSh'];
+
+// ---------- poses (angles in radians; arms measured from straight down, forward = +) ----------
+const G   = {lean:0.12, ht:0, hs:0, lSA:0.6, lFA:3.0, rSA:0.15, rFA:2.7, lTA:0.3, lSh:0.1, rTA:-0.3, rSh:-0.15};
+const BLK = {lean:0.02, ht:-0.1, hs:0, lSA:0.96, lFA:3.1, rSA:0.7, rFA:2.9, lTA:0.3, lSh:0.1, rTA:-0.3, rSh:-0.15};
+
+const ATK = {
+  jab:   {fist:'lF', zone:'head', dmg:7,  cost:6,  wd:0.08, ed:0.07,
+          wind:{lSA:0.3, lFA:2.4, lean:-0.06},
+          ext: {lSA:1.5, lFA:1.5, lean:0.2, ht:0.1}},
+  cross: {fist:'rF', zone:'head', dmg:12, cost:10, wd:0.11, ed:0.08,
+          wind:{rSA:0.4, rFA:2.2, lean:-0.12, rTA:-0.2},
+          ext: {rSA:1.5, rFA:1.48, lean:0.32, ht:0.15, rTA:-0.45, rSh:-0.2}},
+  hook:  {fist:'lF', zone:'head', dmg:11, cost:10, wd:0.12, ed:0.09,
+          wind:{lSA:0.2, lFA:2.3, lean:-0.12},
+          ext: {lSA:1.3, lFA:2.0, lean:0.18, ht:-0.05}},
+  body:  {fist:'lF', zone:'body', dmg:8, cost:8,  wd:0.09, ed:0.08,
+          wind:{lSA:0.5, lFA:2.6, lean:-0.05},
+          ext: {lSA:1.05, lFA:1.3, lean:0.35, ht:0.2, lTA:0.5}},
+  upper: {fist:'rF', zone:'head', dmg:13, cost:12, wd:0.14, ed:0.10,
+          wind:{rSA:0.1, rFA:0.3, lean:-0.15, rTA:-0.25, rSh:-0.3},
+          ext: {rSA:0.75, rFA:2.9, lean:0.3, rTA:-0.2, rSh:-0.25, lTA:0.4}}
+};
+
+// ---------- helpers ----------
+const copyP = p => Object.assign({}, p);
+const lerpP = (a, b, t) => { const o = {}; for (const k of KEYS) o[k] = a[k] + (b[k] - a[k]) * t; return o; };
+const ease = k => k < 0.5 ? 2*k*k : 1 - Math.pow(-2*k + 2, 2) / 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const stance = f => f.block ? BLK : G;
+const merge = (f, o) => Object.assign({}, stance(f), o);
+const busy = f => !!(f.tr || f.seq.length);
+
+function makeFighter(dir, col, glove, ph) {
+  return {dir, col, glove, ph, x:0, hp:100, st:100, cur:copyP(G), tr:null, seq:[],
+          block:false, stepT:0, vx:0, dodgeT:0, fall:0, down:false};
+}
+const P1 = makeFighter(1, '#b8322a', '#e74c3c', 0);
+const C  = makeFighter(-1, '#2456a8', '#3b82f6', 2.3);
+let state = 'fight', downF = null, downT = 0, koT = 0, msgT = 0, paused = false, thinkT = 0, blockT = 0;
+
+// ---------- layout ----------
+function resize() {
+  const r = cv.getBoundingClientRect(), d = Math.min(2, window.devicePixelRatio || 1);
+  W = r.width; H = r.height;
+  cv.width = W * d; cv.height = H * d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  S = Math.min(H / 560, W / 340);
+  GROUND = H * 0.82;
+}
+
+// ---------- skeleton (local units: x forward, y up, origin = ground under root) ----------
+function joints(f) {
+  const p = f.cur, br = Math.sin(time * 2.4 + f.ph) * 0.025;
+  const lean = p.lean + br;
+  const footL = -(88 * Math.cos(p.lTA) + 86 * Math.cos(p.lSh));
+  const footR = -(88 * Math.cos(p.rTA) + 86 * Math.cos(p.rSh));
+  const hip = {x: p.hs, y: -Math.min(footL, footR)};
+  const down = (o, len, a) => ({x: o.x + len * Math.sin(a), y: o.y - len * Math.cos(a)});
+  const up   = (o, len, a) => ({x: o.x + len * Math.sin(a), y: o.y + len * Math.cos(a)});
+  const kL = down(hip, 88, p.lTA), aL = down(kL, 86, p.lSh);
+  const kR = down(hip, 88, p.rTA), aR = down(kR, 86, p.rSh);
+  const chest = up(hip, 100, lean);
+  const head = up(chest, 28, lean + p.ht);
+  const lE = down(chest, 66, p.lSA + lean), lF = down(lE, 60, p.lFA + lean);
+  const rE = down(chest, 66, p.rSA + lean), rF = down(rE, 60, p.rFA + lean);
+  return {hip, kL, aL, kR, aR, chest, head, lE, lF, rE, rF};
+}
+function toWorld(f, p) { return {x: f.x + f.dir * p.x * S, y: GROUND - p.y * S}; }
+
+// ---------- drawing ----------
+function seg(a, b, w, c) {
+  ctx.strokeStyle = c; ctx.lineWidth = w * S; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+}
+function dot(p, r, c) {
+  ctx.fillStyle = c; ctx.beginPath(); ctx.arc(p.x, p.y, r * S, 0, Math.PI * 2); ctx.fill();
+}
+function glove(p, c) {
+  ctx.fillStyle = c; ctx.beginPath(); ctx.arc(p.x, p.y, 14 * S, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.stroke();
+}
+function drawFighter(f) {
+  const J = joints(f), P = {};
+  for (const k in J) P[k] = toWorld(f, J[k]);
+  if (f.fall > 0) {
+    const th = -f.dir * f.fall * Math.PI / 2 * 0.95, c = Math.cos(th), s = Math.sin(th), hp = P.hip;
+    let maxY = -1e9;
+    for (const k in P) {
+      const x = P[k].x - hp.x, y = P[k].y - hp.y;
+      P[k] = {x: hp.x + x * c - y * s, y: hp.y + x * s + y * c};
+      maxY = Math.max(maxY, P[k].y);
+    }
+    const dy = GROUND - maxY;
+    for (const k in P) P[k].y += dy;
+  }
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.beginPath(); ctx.ellipse(P.hip.x, GROUND + 3, 60 * S, 9 * S, 0, 0, Math.PI * 2); ctx.fill();
+
+  seg(P.hip, P.kR, 15, f.col); seg(P.kR, P.aR, 11, SKIN); dot(P.aR, 7, '#1a1a1a');
+  seg(P.chest, P.rE, 10, SKIN); seg(P.rE, P.rF, 9, SKIN); glove(P.rF, f.glove);
+  seg(P.hip, P.chest, 34, SKIN);
+  dot(P.hip, 20, f.col);
+  seg(P.hip, P.kL, 15, f.col); seg(P.kL, P.aL, 11, SKIN); dot(P.aL, 7, '#1a1a1a');
+  dot(P.head, 20, SKIN);
+  ctx.strokeStyle = HAIR; ctx.lineWidth = 7 * S;
+  ctx.beginPath(); ctx.arc(P.head.x, P.head.y, 17 * S, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+  seg(P.chest, P.lE, 10, SKIN); seg(P.lE, P.lF, 9, SKIN); glove(P.lF, f.glove);
+}
+function render() {
+  ctx.save();
+  if (shake > 0) ctx.translate((Math.random() - .5) * shake * S, (Math.random() - .5) * shake * S);
+  ctx.clearRect(-20, -20, W + 40, H + 40);
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0d111c'); g.addColorStop(1, '#1d2233');
+  ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40);
+  // spotlights
+  ctx.fillStyle = 'rgba(170,190,255,.06)';
+  for (const x of [W * .25, W * .75]) {
+    ctx.beginPath(); ctx.moveTo(x - 24, 0); ctx.lineTo(x + 24, 0);
+    ctx.lineTo(x + 130, GROUND); ctx.lineTo(x - 130, GROUND); ctx.closePath(); ctx.fill();
+  }
+  // ropes and posts
+  const ropeCols = ['#e74c3c', '#f2f2f2', '#3b82f6'];
+  for (let i = 0; i < 3; i++) {
+    const y = GROUND - (120 + i * 55) * S;
+    ctx.strokeStyle = ropeCols[i]; ctx.lineWidth = 3 * S;
+    ctx.beginPath(); ctx.moveTo(-10, y); ctx.lineTo(W + 10, y); ctx.stroke();
+  }
+  ctx.strokeStyle = '#4a5166'; ctx.lineWidth = 8 * S;
+  for (const x of [6, W - 6]) {
+    ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x, GROUND - 260 * S); ctx.stroke();
+  }
+  // canvas floor
+  ctx.fillStyle = '#262b36'; ctx.fillRect(-20, GROUND, W + 40, H - GROUND + 40);
+  ctx.fillStyle = '#3a4152'; ctx.fillRect(-20, GROUND, W + 40, 2);
+
+  drawFighter(C);
+  drawFighter(P1);
+  ctx.restore();
+}
+
+// ---------- animation core ----------
+function tick(f, dt) {
+  f.stepT = Math.max(0, f.stepT - dt);
+  if (f.stepT > 0) f.x += f.vx * dt;
+  f.dodgeT = Math.max(0, f.dodgeT - dt);
+  f.st = Math.min(100, f.st + (busy(f) ? 3 : 12) * dt);
+  if (f.tr) {
+    f.tr.t += dt;
+    const k = Math.min(1, f.tr.t / f.tr.dur);
+    f.cur = lerpP(f.tr.from, f.tr.to, ease(k));
+    if (k >= 1) {
+      const h = f.tr.hit;
+      f.tr = null;
+      if (h) resolve(f, h);
+    }
+  }
+  if (!f.tr && f.seq.length) {
+    const n = f.seq.shift();
+    const to = typeof n.to === 'function' ? n.to() : n.to;
+    f.tr = {from: copyP(f.cur), to, dur: n.dur, t: 0, hit: n.hit};
+  }
+  f.x = clamp(f.x, 40, W - 40);
+}
+
+function doAttack(f, k) {
+  if (state !== 'fight' || f.down || busy(f) || f.stepT > 0 || f.block) return;
+  const a = ATK[k], sp = f.st < 25 ? 1.35 : 1;
+  f.st = Math.max(0, f.st - a.cost);
+  f.seq = [
+    {to: () => merge(f, a.wind), dur: a.wd * sp},
+    {to: () => merge(f, a.ext),  dur: a.ed * sp, hit: k},
+    {to: () => stance(f), dur: 0.25 * sp}
+  ];
+}
+
+function step(f, dir) {
+  if (state !== 'fight' || f.down || busy(f) || f.stepT > 0 || f.block) return;
+  const fwd = dir * f.dir;
+  const stepPose = fwd > 0 ? {lTA: 0.6, lSh: 0.25, rTA: -0.2, rSh: -0.3}
+                           : {lTA: 0.0, lSh: -0.1, rTA: -0.55, rSh: -0.3};
+  f.seq = [{to: () => merge(f, stepPose), dur: 0.1}, {to: () => stance(f), dur: 0.14}];
+  f.stepT = 0.24; f.vx = dir * S * 55 / 0.24;
+}
+
+function slip(f) {
+  if (state !== 'fight' || f.down || busy(f) || f.block) return;
+  f.dodgeT = 0.35;
+  f.seq = [{to: () => merge(f, {lean: -0.22, ht: 0.35, hs: -10}), dur: 0.09},
+           {to: () => stance(f), dur: 0.3}];
+}
+
+function resolve(a, k) {
+  const d = ATK[k], t = a === P1 ? C : P1;
+  const fw = toWorld(a, joints(a)[d.fist]);
+  const J = joints(t);
+  const hd = toWorld(t, J.head);
+  const bd = toWorld(t, {x: (J.chest.x + J.hip.x) / 2, y: (J.chest.y + J.hip.y) / 2});
+  let zone = null;
+  if (d.zone === 'head' && dist(fw, hd) < 44 * S) zone = 'head';
+  if (d.zone === 'body' && dist(fw, bd) < 52 * S) zone = 'body';
+  if (!zone) { showMsg('МИМО', .4); return; }
+  if (zone === 'head' && t.dodgeT > 0) { showMsg('УКЛОН!', .6); return; }
+  if (t.block) {
+    if (zone === 'head') {
+      showMsg('БЛОК', .6);
+      t.seq = [{to: () => merge(t, {lean: 0.04}), dur: 0.05}, {to: () => stance(t), dur: 0.2}];
+      return;
+    }
+  }
+  let dmg = d.dmg;
+  let react;
+  if (zone === 'head') {
+    react = {lean: -0.22, ht: -0.45, hs: -6}; shake = Math.max(shake, 7);
+    showMsg('ПОПАДАНИЕ', .6);
+  } else {
+    react = {lean: 0.42, ht: 0.25}; shake = Math.max(shake, 3);
+    showMsg('КОРПУС', .6);
+    if (t.block) dmg *= 0.35;
+  }
+  t.hp = Math.max(0, t.hp - dmg);
+  t.tr = null;
+  t.seq = [{to: () => merge(t, react), dur: 0.07}, {to: () => stance(t), dur: 0.35}];
+  t.x += a.dir * 12 * S;
+  if (t.hp <= 0) startKnockdown(t);
+}
+
+function startKnockdown(t) {
+  state = 'down'; downF = t; downT = 0;
+  t.down = true; t.seq = []; t.tr = null; t.block = false;
+}
+
+// ---------- CPU ----------
+function ai(dt) {
+  if (C.block && (blockT -= dt) <= 0) {
+    C.block = false;
+    if (!busy(C)) C.seq = [{to: () => G, dur: 0.15}];
+  }
+  thinkT -= dt;
+  if (thinkT > 0) return;
+  thinkT = 0.45 + Math.random() * 0.6;
+  if (busy(C) || C.stepT > 0 || C.down) return;
+  const d = Math.abs(C.x - P1.x) / S;
+  if (P1.tr && P1.tr.hit && d < 170 && Math.random() < 0.35) {
+    C.block = true; blockT = 0.45; C.seq = [{to: () => BLK, dur: 0.08}]; return;
+  }
+  if (d > 125) { step(C, P1.x > C.x ? 1 : -1); return; }
+  const r = Math.random();
+  if (r < 0.45) {
+    const ks = ['jab', 'jab', 'cross', 'hook', 'body', 'upper'];
+    doAttack(C, ks[Math.floor(Math.random() * ks.length)]);
+  } else if (r < 0.6) {
+    C.block = true; blockT = 0.6; C.seq = [{to: () => BLK, dur: 0.08}];
+  } else if (r < 0.75 && d < 110) {
+    step(C, P1.x > C.x ? -1 : 1);
+  } else {
+    slip(C);
+  }
+}
+
+// ---------- round flow ----------
+function separate() {
+  const d = C.x - P1.x, min = 95 * S;
+  if (Math.abs(d) < min) {
+    const m = (min - Math.abs(d)) / 2 * Math.sign(d || 1);
+    P1.x -= m; C.x += m;
+  }
+}
+function newRound() {
+  for (const f of [P1, C]) {
+    f.hp = 100; f.st = 100; f.fall = 0; f.down = false; f.block = false;
+    f.seq = []; f.tr = null; f.stepT = 0; f.dodgeT = 0; f.cur = copyP(G);
+  }
+  P1.x = cv.getBoundingClientRect().width / 2 - 60 * S;
+  C.x  = cv.getBoundingClientRect().width / 2 + 60 * S;
+  state = 'fight'; downF = null;
+  showMsg('РАУНД 1', 1.2);
+}
+function showMsg(t, dur) {
+  $('msg').textContent = t;
+  msgT = dur;
+}
+
+// ---------- main loop ----------
+function frame(dt) {
+  time += dt;
+  shake = Math.max(0, shake - dt * 30);
+  if (msgT > 0 && (msgT -= dt) <= 0 && state === 'fight') $('msg').textContent = '';
+
+  if (state === 'fight' && !paused) {
+    tick(P1, dt); tick(C, dt); ai(dt); separate();
+  } else if (state === 'down') {
+    downT += dt;
+    downF.fall = Math.min(1, downT / 0.8);
+    if (downT >= 0.8) {
+      const cnt = Math.min(10, Math.floor(downT - 0.8) + 1);
+      showMsg('СЧЁТ ' + cnt, 0.2);
+    }
+    if (downT >= 9.8) {
+      state = 'ko'; koT = 3;
+      showMsg('KNOCKDOWN · ' + (downF === P1 ? 'CPU WINS' : 'YOU WIN'), 99);
+    }
+  } else if (state === 'ko') {
+    koT -= dt;
+    if (koT <= 0) newRound();
+  }
+  $('hpP').style.width = P1.hp + '%';
+  $('hpC').style.width = C.hp + '%';
+  $('stP').style.width = P1.st + '%';
+  $('stC').style.width = C.st + '%';
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  if (!paused) frame(dt); else time += 0;
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ---------- controls ----------
+document.querySelectorAll('#pad button').forEach(b => {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    b.classList.add('hit');
+    if (k === 'L') step(P1, -1);
+    else if (k === 'R') step(P1, 1);
+    else if (k === 'block') {
+      P1.block = true;
+      if (!busy(P1)) P1.seq = [{to: () => BLK, dur: 0.08}];
+    }
+    else if (k === 'slip') slip(P1);
+    else doAttack(P1, k);
+  });
+  const release = () => {
+    b.classList.remove('hit');
+    if (k === 'block') {
+      P1.block = false;
+      if (!busy(P1)) P1.seq = [{to: () => G, dur: 0.15}];
+    }
+  };
+  b.addEventListener('pointerup', release);
+  b.addEventListener('pointerleave', release);
+  b.addEventListener('pointercancel', release);
+});
+
+$('pause').addEventListener('click', () => {
+  if (state === 'ko') return;
+  paused = !paused;
+  $('pause').textContent = paused ? '▶ ИГРАТЬ' : 'II ПАУЗА';
+  if (paused) showMsg('ПАУЗА', 99); else showMsg('', 0);
+});
+
+window.addEventListener('resize', () => { resize(); });
+resize();
+newRound();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
